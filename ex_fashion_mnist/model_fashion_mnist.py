@@ -81,5 +81,5 @@ class FashionCNN(nn.Module):
         out = self.fc2(out)
         out = self.fc3(out)
         
-        return out
+        return F.log_softmax(out, dim=1)
 

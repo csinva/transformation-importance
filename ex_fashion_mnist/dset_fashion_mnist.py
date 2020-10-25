@@ -11,16 +11,14 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # Training settings
 def get_args():
     parser = argparse.ArgumentParser(description='PyTorch Fashion-MNIST Example')
-    parser.add_argument('--batch-size', type=int, default=64, metavar='N',
-                        help='input batch size for training (default: 64)')
+    parser.add_argument('--batch-size', type=int, default=100, metavar='N',
+                        help='input batch size for training (default: 100)')
     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
                         help='input batch size for testing (default: 1000)')
-    parser.add_argument('--epochs', type=int, default=10, metavar='N',
-                        help='number of epochs to train (default: 10)')
-    parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
-                        help='learning rate (default: 0.01)')
-    parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
-                        help='SGD momentum (default: 0.5)')
+    parser.add_argument('--epochs', type=int, default=50, metavar='N',
+                        help='number of epochs to train (default: 50)')
+    parser.add_argument('--lr', type=float, default=1e-4, metavar='LR',
+                        help='learning rate (default: 0.0001)')
     parser.add_argument('--no-cuda', action='store_true', default=False,
                         help='disables CUDA training')
     parser.add_argument('--seed', type=int, default=1, metavar='S',
@@ -35,46 +33,50 @@ def load_data(train_batch_size,
               test_batch_size,
               device,
               data_dir='data',
-              shuffle=False,
+              shuffle=True,
+              shuffle_target=False,
               return_indices=False):
     kwargs = {'num_workers': 1, 'pin_memory': True} if device == 'cuda' else {}
     FashionMNIST_dataset = datasets.FashionMNIST
     if return_indices:
         FashionMNIST_dataset = dataset_with_indices(FashionMNIST_dataset)
+        
+    train_set = FashionMNIST_dataset(data_dir, train=True, download=True,
+                   transform=transforms.Compose([transforms.ToTensor()]))
+    test_set = FashionMNIST_dataset(data_dir, train=False, download=True,
+                   transform=transforms.Compose([transforms.ToTensor()]))
+    
+    if shuffle_target:
+        train_set.targets[:30000] = torch.randint(0, 10, (30000,))
 
-    train_loader = torch.utils.data.DataLoader(
-        FashionMNIST_dataset(data_dir, train=True, download=True,
-                   transform=transforms.Compose([
-                       transforms.ToTensor(),
-                   ])), batch_size=train_batch_size, shuffle=shuffle, **kwargs)
-    test_loader = torch.utils.data.DataLoader(
-        FashionMNIST_dataset(data_dir, train=False,
-                   transform=transforms.Compose([
-                       transforms.ToTensor(),
-                   ])), batch_size=test_batch_size, shuffle=shuffle, **kwargs)
+    train_loader = torch.utils.data.DataLoader(train_set, batch_size=train_batch_size, shuffle=shuffle, **kwargs)
+    test_loader = torch.utils.data.DataLoader(test_set, batch_size=test_batch_size, shuffle=False, **kwargs)
     return train_loader, test_loader
 
 
-def train(epoch, train_loader, model, args):
+def train(train_loader, test_loader, model, args):
     model.train()
-    for batch_idx, (data, target) in enumerate(train_loader):
-        if args.cuda == "True":
-            data, target = data.to(device), target.to(device)
-        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-        # optimizer = optim.Adam(model.parameters(), lr=args.lr)
-        optimizer.zero_grad()
-        output = model(data)
-        loss = F.nll_loss(output, target)
-        loss.backward()
-        optimizer.step()
-        if batch_idx % args.log_interval == 0:
-            print('\rTrain Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
-                       100. * batch_idx / len(train_loader), loss.data.item()), end='')
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    for epoch in range(args.epochs):
+        for batch_idx, (data, target) in enumerate(train_loader):
+            if args.cuda == "True":
+                data, target = data.to(device), target.to(device)
+            optimizer.zero_grad()
+            output = model(data)
+            loss = F.nll_loss(output, target)
+            loss.backward()
+            optimizer.step()
+        train_loss, train_acc = test(train_loader, model, args, verbose=False)
+        test_loss, test_acc = test(test_loader, model, args, verbose=False)
+        print('====> Epoch: {} Average train loss: {:.4f}, Average test loss: {:.4f} (accuracies: {:.2f}%, {:.2f}%)'.format(epoch, train_loss, test_loss, train_acc, test_acc))
+        
+        if epoch + 1 in [5, 10, 20, 30, 40, 50, 70, 100, 200, 300, 500]:
+            torch.save(model.state_dict(), 'models/FashionCNN_ShuffleLabel50%_epochs={}.pth'.format(epoch+1))
+        
     return model
 
 
-def test(model, test_loader, args):
+def test(test_loader, model, args, verbose=True):
     model.eval()
     test_loss = 0
     correct = 0
@@ -87,19 +89,12 @@ def test(model, test_loader, args):
         correct += pred.eq(target.data.view_as(pred)).cpu().sum()
 
     test_loss /= len(test_loader.dataset)
-    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.2f}%)\n'.format(
-        test_loss, correct, len(test_loader.dataset),
-        100. * correct / len(test_loader.dataset)))
-
-
-def get_im_and_label(num, device='cuda'):
-    torch.manual_seed(130)
-    _, data_loader = load_data(train_batch_size=1, test_batch_size=1,
-                               device=device, data_dir='mnist/data',
-                               shuffle=False)
-    for i, im in enumerate(data_loader):
-        if i == num:
-            return im[0].to(device), im[0].numpy().squeeze(), im[1].numpy()[0]
+    if verbose:
+        print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.2f}%)\n'.format(
+            test_loss, correct, len(test_loader.dataset),
+            100. * correct / len(test_loader.dataset)))
+    else:
+        return test_loss, 100.*correct/len(test_loader.dataset)
 
 
 def pred_ims(model, ims, layer='softmax', device='cuda'):
@@ -113,21 +108,6 @@ def pred_ims(model, ims, layer='softmax', device='cuda'):
     return preds.data.cpu().numpy()
 
 
-def output_label(label):
-    output_mapping = {
-                 0: "T-shirt/Top",
-                 1: "Trouser",
-                 2: "Pullover",
-                 3: "Dress",
-                 4: "Coat", 
-                 5: "Sandal", 
-                 6: "Shirt",
-                 7: "Sneaker",
-                 8: "Bag",
-                 9: "Ankle Boot"
-                 }
-    input = (label.item() if type(label) == torch.Tensor else label)
-    return output_mapping[input]
 
 
 # mnist dataset with return index
@@ -144,47 +124,6 @@ def dataset_with_indices(cls):
     return type(cls.__name__, (cls,), {
         '__getitem__': __getitem__,
     })
-
-
-# dataset
-class MyDataset(torch.utils.data.Dataset):
-    def __init__(self, data, targets, transform=None, return_indices=True):
-        self.data = data
-        self.targets = targets
-        self.transform = transform
-        self.return_indices = return_indices
-
-    def __len__(self):
-        return len(self.targets)
-
-    def __getitem__(self, index):
-        img, target = self.data[index].reshape(28,28), int(self.targets[index])
-        if self.transform:
-            img = self.transform(img)
-        if self.return_indices:
-            return img, target, index
-        return img, target
-
-
-def load_mnist_arrays(train_loader, test_loader):
-    # dataset
-    X = train_loader.dataset.data.numpy().astype(np.float32)
-    X = X.reshape(X.shape[0], -1)
-    X /= 255
-    Y = train_loader.dataset.targets.numpy()
-
-    X_test = test_loader.dataset.data.numpy().astype(np.float32)
-    X_test = X_test.reshape(X_test.shape[0], -1)
-    X_test /= 255
-    Y_test = test_loader.dataset.targets.numpy()
-    data_dict = {
-        'data': X,
-        'data_t': X_test,
-        'targets': Y,
-        'targets_t': Y_test,
-    }
-    return data_dict
-
 
 
 if __name__ == '__main__':

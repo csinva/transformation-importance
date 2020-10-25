@@ -14,7 +14,7 @@ sys.path.append('../..')
 def get_attributions(x_t: torch.Tensor, 
                      mt, 
                      class_num=1,
-                     attr_methods = ['IG', 'DeepLift', 'SHAP', 'CD', 'InputXGradient'],
+                     attr_methods = ['IG', 'DeepLift', 'SHAP', 'CD', 'Saliency', 'InputXGradient'],
                      device='cuda'):
     '''Returns all scores in a dict assuming mt works with both grads + CD
 
@@ -30,9 +30,9 @@ def get_attributions(x_t: torch.Tensor,
 
     results = {}
     if 'CD' in attr_methods:
-        attr_funcs = [IntegratedGradients, DeepLift, GradientShap, None, InputXGradient]
+        attr_funcs = [IntegratedGradients, DeepLift, GradientShap, None, Saliency, InputXGradient]
     else:
-        attr_funcs = [IntegratedGradients, DeepLift, GradientShap, InputXGradient]
+        attr_funcs = [IntegratedGradients, DeepLift, GradientShap, Saliency, InputXGradient]
         
     for name, func in zip(attr_methods, attr_funcs):
         if name == 'CD':
@@ -47,8 +47,10 @@ def get_attributions(x_t: torch.Tensor,
         else:
             baseline = torch.zeros(x_t.shape).to(device)
             attributer = func(mt)
-            if name in ['InputXGradient']:
+            if name in ['Saliency', 'InputXGradient']:
                 attributions = attributer.attribute(deepcopy(x_t), target=class_num)
+            elif name in ['IG']:
+                attributions = attributer.attribute(deepcopy(x_t), deepcopy(baseline), target=class_num, internal_batch_size=100)
             else:
                 attributions = attributer.attribute(deepcopy(x_t), deepcopy(baseline), target=class_num)
             attributions = attributions.cpu().detach().numpy().squeeze()
